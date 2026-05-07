@@ -1,98 +1,96 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const { initializeApp } = require('firebase/app');
-const { getDatabase, ref, onChildAdded, update } = require('firebase/database');
+const { Client, GatewayIntentBits } = require('discord.js');
+const https = require('https');
 
-/* ══════════════════════════════════
-   CONFIG — عدّل هنا
-══════════════════════════════════ */
-const BOT_TOKEN  = process.env.BOT_TOKEN;   // من Railway Variables
-const GUILD_ID   = process.env.GUILD_ID;    // ID السيرفر
-const ROLE_ID    = process.env.ROLE_ID;     // ID رتبة "متقدم"
+/* ══════ CONFIG ══════ */
+const BOT_TOKEN    = process.env.BOT_TOKEN;
+const GUILD_ID     = process.env.GUILD_ID;
+const ROLE_ID      = process.env.ROLE_ID;
+const FIREBASE_URL = 'https://monaco1-58d60-default-rtdb.firebaseio.com';
 
-const firebaseConfig = {
-  apiKey:            "AIzaSyAGddF4CRhrQ1rW2LXwY6FyHww6iHdqyYg",
-  authDomain:        "monaco1-58d60.firebaseapp.com",
-  databaseURL:       "https://monaco1-58d60-default-rtdb.firebaseio.com",
-  projectId:         "monaco1-58d60",
-  storageBucket:     "monaco1-58d60.firebasestorage.app",
-  messagingSenderId: "117043233568",
-  appId:             "1:117043233568:web:97d17d887270d724d38d45"
-};
-
-/* ══════════════════════════════════
-   INIT
-══════════════════════════════════ */
-const fbApp = initializeApp(firebaseConfig);
-const db    = getDatabase(fbApp);
-
+/* ══════ DISCORD CLIENT ══════ */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMembers
   ]
 });
 
-/* ══════════════════════════════════
-   BOT READY
-══════════════════════════════════ */
-client.once('ready', () => {
-  console.log(`✅ البوت شغّال: ${client.user.tag}`);
-  listenForApplications();
-});
+/* ══════ HTTP HELPER ══════ */
+function get(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch(e) { resolve(null); }
+      });
+    }).on('error', reject);
+  });
+}
 
-/* ══════════════════════════════════
-   LISTEN FOR NEW APPLICATIONS
-══════════════════════════════════ */
-// نخزن المفاتيح الموجودة مسبقاً عشان ما نعالج القديمة
-const processedKeys = new Set();
-let initialized = false;
+/* ══════ GIVE ROLE ══════ */
+async function giveRole(userId) {
+  try {
+    const guild  = await client.guilds.fetch(GUILD_ID);
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) {
+      console.log(`⚠️ اللاعب ${userId} مش في السيرفر`);
+      return;
+    }
+    if (member.roles.cache.has(ROLE_ID)) {
+      console.log(`ℹ️ ${member.user.username} عنده الرتبة مسبقاً`);
+      return;
+    }
+    await member.roles.add(ROLE_ID);
+    console.log(`✅ تم إعطاء الرتبة لـ ${member.user.username}`);
+  } catch (err) {
+    console.error('❌ خطأ في إعطاء الرتبة:', err.message);
+  }
+}
 
-function listenForApplications() {
-  const appsRef = ref(db, 'cfw_applications');
+/* ══════ POLLING ══════ */
+let lastKeys = new Set();
+let firstRun = true;
 
-  onChildAdded(appsRef, async (snapshot) => {
-    const key = snapshot.key;
+async function checkApplications() {
+  try {
+    const data = await get(`${FIREBASE_URL}/cfw_applications.json`);
+    if (!data) return;
 
-    // تجاهل الطلبات الموجودة قبل تشغيل البوت
-    if (!initialized) {
-      processedKeys.add(key);
+    const keys = Object.keys(data);
+
+    if (firstRun) {
+      // أول تشغيل — خزّن الموجودة ولا تعالجها
+      keys.forEach(k => lastKeys.add(k));
+      firstRun = false;
+      console.log(`📋 ${keys.length} طلب موجود مسبقاً — يستمع للجديدة...`);
       return;
     }
 
-    // تجاهل المعالجة المكررة
-    if (processedKeys.has(key)) return;
-    processedKeys.add(key);
+    // طلبات جديدة فقط
+    for (const key of keys) {
+      if (lastKeys.has(key)) continue;
+      lastKeys.add(key);
 
-    const app = snapshot.val();
-    if (!app || !app.userId) return;
+      const app = data[key];
+      if (!app || !app.userId) continue;
 
-    console.log(`📋 طلب جديد من: ${app.globalName || app.username}`);
-
-    try {
-      const guild  = await client.guilds.fetch(GUILD_ID);
-      const member = await guild.members.fetch(app.userId).catch(() => null);
-
-      if (member) {
-        // إعطاء الرتبة
-        await member.roles.add(ROLE_ID);
-        console.log(`✅ تم إعطاء الرتبة لـ ${app.globalName || app.username}`);
-      } else {
-        console.log(`⚠️ اللاعب ${app.userId} مش موجود في السيرفر`);
-      }
-
-    } catch (err) {
-      console.error('❌ خطأ:', err.message);
+      console.log(`🆕 طلب جديد من: ${app.globalName || app.username}`);
+      await giveRole(app.userId);
     }
-  });
 
-  // بعد ثانية نبدأ نعالج الطلبات الجديدة فقط
-  setTimeout(() => {
-    initialized = true;
-    console.log('👂 البوت يستمع للطلبات الجديدة...');
-  }, 1000);
+  } catch (err) {
+    console.error('❌ خطأ في الفحص:', err.message);
+  }
 }
 
-/* ══════════════════════════════════
-   LOGIN
-══════════════════════════════════ */
+/* ══════ START ══════ */
+client.once('ready', () => {
+  console.log(`✅ البوت شغّال: ${client.user.tag}`);
+  // فحص كل 10 ثواني
+  checkApplications();
+  setInterval(checkApplications, 10000);
+});
+
 client.login(BOT_TOKEN);
