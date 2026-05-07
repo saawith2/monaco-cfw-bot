@@ -1,13 +1,11 @@
 const { Client, GatewayIntentBits } = require('discord.js');
 const https = require('https');
 
-/* ══════ CONFIG ══════ */
 const BOT_TOKEN    = process.env.BOT_TOKEN;
 const GUILD_ID     = process.env.GUILD_ID;
 const ROLE_ID      = process.env.ROLE_ID;
-const FIREBASE_URL = 'https://monaco1-58d60-default-rtdb.firebaseio.com';
+const FIREBASE_URL = 'https://monaco1-58d60-default-rtdb.firebaseio.com/cfw_applications.json';
 
-/* ══════ DISCORD CLIENT ══════ */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -15,89 +13,73 @@ const client = new Client({
   ]
 });
 
-/* ══════ HTTP HELPER ══════ */
-function get(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, res => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
+// جلب البيانات من Firebase
+function fetchFirebase() {
+  return new Promise((resolve) => {
+    https.get(FIREBASE_URL, (res) => {
+      let raw = '';
+      res.on('data', c => raw += c);
       res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch(e) { resolve(null); }
+        try { resolve(JSON.parse(raw)); }
+        catch { resolve(null); }
       });
-    }).on('error', reject);
+    }).on('error', (e) => {
+      console.log('Firebase error:', e.message);
+      resolve(null);
+    });
   });
 }
 
-/* ══════ GIVE ROLE ══════ */
-async function giveRole(userId) {
+// إعطاء الرتبة
+async function giveRole(userId, username) {
   try {
     const guild  = await client.guilds.fetch(GUILD_ID);
-    const member = await guild.members.fetch(userId).catch(() => null);
-    if (!member) {
-      console.log(`⚠️ اللاعب ${userId} مش في السيرفر`);
-      return;
-    }
+    const member = await guild.members.fetch(userId);
     if (member.roles.cache.has(ROLE_ID)) {
-      console.log(`ℹ️ ${member.user.username} عنده الرتبة مسبقاً`);
+      console.log(`${username} - عنده الرتبة مسبقاً`);
       return;
     }
     await member.roles.add(ROLE_ID);
-    console.log(`✅ تم إعطاء الرتبة لـ ${member.user.username}`);
-  } catch (err) {
-    console.error('❌ خطأ في إعطاء الرتبة:', err.message);
+    console.log(`✅ رتبة أُعطيت لـ ${username}`);
+  } catch (e) {
+    console.log(`خطأ مع ${userId}: ${e.message}`);
   }
 }
 
-/* ══════ POLLING ══════ */
-let lastKeys = new Set();
-let firstRun = true;
+const seen = new Set();
+let ready  = false;
 
-async function checkApplications() {
-  try {
-    console.log('🔍 يفحص Firebase...');
-    const data = await get(`${FIREBASE_URL}/cfw_applications.json`);
-    
-    if (!data) {
-      console.log('⚠️ Firebase رجع null — تأكد من Database Rules');
-      return;
-    }
+async function poll() {
+  const data = await fetchFirebase();
 
-    const keys = Object.keys(data);
-    console.log(`📊 عدد الطلبات الكلي: ${keys.length}`);
+  if (!data || typeof data !== 'object') {
+    console.log('لا توجد بيانات في Firebase بعد');
+    return;
+  }
 
-    if (firstRun) {
-      keys.forEach(k => lastKeys.add(k));
-      firstRun = false;
-      console.log(`📋 ${keys.length} طلب موجود مسبقاً — يستمع للجديدة...`);
-      return;
-    }
+  const entries = Object.entries(data);
+  console.log(`Firebase: ${entries.length} طلب`);
 
-    for (const key of keys) {
-      if (lastKeys.has(key)) continue;
-      lastKeys.add(key);
+  for (const [key, app] of entries) {
+    if (!ready) { seen.add(key); continue; }   // أول تشغيل — تجاهل القديمة
+    if (seen.has(key)) continue;
+    seen.add(key);
 
-      const app = data[key];
-      console.log(`🆕 طلب جديد! userId: ${app?.userId}`);
-      if (!app || !app.userId) {
-        console.log('⚠️ الطلب ما فيه userId');
-        continue;
-      }
+    if (!app?.userId) continue;
+    console.log(`🆕 طلب جديد: ${app.globalName || app.username}`);
+    await giveRole(app.userId, app.globalName || app.username);
+  }
 
-      await giveRole(app.userId);
-    }
-
-  } catch (err) {
-    console.error('❌ خطأ في الفحص:', err.message);
+  if (!ready) {
+    ready = true;
+    console.log('✅ جاهز — يراقب الطلبات الجديدة كل 10 ثواني');
   }
 }
 
-/* ══════ START ══════ */
 client.once('ready', () => {
-  console.log(`✅ البوت شغّال: ${client.user.tag}`);
-  // فحص كل 10 ثواني
-  checkApplications();
-  setInterval(checkApplications, 10000);
+  console.log(`🤖 البوت: ${client.user.tag}`);
+  poll();
+  setInterval(poll, 10000);
 });
 
-client.login(BOT_TOKEN);
+client.login(BOT_TOKEN).catch(e => console.log('خطأ في تسجيل الدخول:', e.message));
