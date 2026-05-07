@@ -55,28 +55,35 @@ let firstRun = true;
 
 async function checkApplications() {
   try {
+    console.log('🔍 يفحص Firebase...');
     const data = await get(`${FIREBASE_URL}/cfw_applications.json`);
-    if (!data) return;
+    
+    if (!data) {
+      console.log('⚠️ Firebase رجع null — تأكد من Database Rules');
+      return;
+    }
 
     const keys = Object.keys(data);
+    console.log(`📊 عدد الطلبات الكلي: ${keys.length}`);
 
     if (firstRun) {
-      // أول تشغيل — خزّن الموجودة ولا تعالجها
       keys.forEach(k => lastKeys.add(k));
       firstRun = false;
       console.log(`📋 ${keys.length} طلب موجود مسبقاً — يستمع للجديدة...`);
       return;
     }
 
-    // طلبات جديدة فقط
     for (const key of keys) {
       if (lastKeys.has(key)) continue;
       lastKeys.add(key);
 
       const app = data[key];
-      if (!app || !app.userId) continue;
+      console.log(`🆕 طلب جديد! userId: ${app?.userId}`);
+      if (!app || !app.userId) {
+        console.log('⚠️ الطلب ما فيه userId');
+        continue;
+      }
 
-      console.log(`🆕 طلب جديد من: ${app.globalName || app.username}`);
       await giveRole(app.userId);
     }
 
