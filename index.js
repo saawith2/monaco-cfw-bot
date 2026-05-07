@@ -13,7 +13,6 @@ const client = new Client({
   ]
 });
 
-// جلب البيانات من Firebase
 function fetchFirebase() {
   return new Promise((resolve) => {
     https.get(FIREBASE_URL, (res) => {
@@ -30,7 +29,6 @@ function fetchFirebase() {
   });
 }
 
-// إعطاء الرتبة
 async function giveRole(userId, username) {
   try {
     const guild  = await client.guilds.fetch(GUILD_ID);
@@ -46,88 +44,44 @@ async function giveRole(userId, username) {
   }
 }
 
-const seen = new Set();
-let ready  = false;
+const rolesGiven = new Set();
+let firstRun = true;
 
 async function poll() {
   const data = await fetchFirebase();
 
   if (!data || typeof data !== 'object') {
-    console.log('لا توجد بيانات في Firebase بعد');
+    console.log('لا توجد بيانات في Firebase');
     return;
   }
 
   const entries = Object.entries(data);
-  console.log(`Firebase: ${entries.length} طلب`);
 
-  for (const [key, app] of entries) {
-    if (!ready) { seen.add(key); continue; }   // أول تشغيل — تجاهل القديمة
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    if (!app?.userId) continue;
-    console.log(`🆕 طلب جديد: ${app.globalName || app.username}`);
-    await giveRole(app.userId, app.globalName || app.username);
-  }
-
-  if (!ready) {
-    ready = true;
-    console.log('✅ جاهز — يراقب الطلبات الجديدة كل 10 ثواني');
-  }
-}
-
-client.once('ready', () => {
-  console.log(`🤖 البوت: ${client.user.tag}`);
-  poll();
-  setInterval(poll, 10000);
-});
-
-client.login(BOT_TOKEN).catch(e => console.log('خطأ في تسجيل الدخول:', e.message));    const member = await guild.members.fetch(userId);
-    if (member.roles.cache.has(ROLE_ID)) {
-      console.log(`${username} - عنده الرتبة مسبقاً`);
-      return;
+  if (firstRun) {
+    for (const [key, app] of entries) {
+      if (app?.status === 'accepted') rolesGiven.add(key);
     }
-    await member.roles.add(ROLE_ID);
-    console.log(`✅ رتبة أُعطيت لـ ${username}`);
-  } catch (e) {
-    console.log(`خطأ مع ${userId}: ${e.message}`);
-  }
-}
-
-const seen = new Set();
-let ready  = false;
-
-async function poll() {
-  const data = await fetchFirebase();
-
-  if (!data || typeof data !== 'object') {
-    console.log('لا توجد بيانات في Firebase بعد');
+    firstRun = false;
+    console.log(`✅ جاهز — يراقب التغييرات كل 5 ثواني`);
     return;
   }
 
-  const entries = Object.entries(data);
-  console.log(`Firebase: ${entries.length} طلب`);
-
   for (const [key, app] of entries) {
-    if (!ready) { seen.add(key); continue; }   // أول تشغيل — تجاهل القديمة
-    if (seen.has(key)) continue;
-    seen.add(key);
-
     if (!app?.userId) continue;
-    console.log(`🆕 طلب جديد: ${app.globalName || app.username}`);
-    await giveRole(app.userId, app.globalName || app.username);
-  }
+    if (rolesGiven.has(key)) continue;
 
-  if (!ready) {
-    ready = true;
-    console.log('✅ جاهز — يراقب الطلبات الجديدة كل 10 ثواني');
+    if (app.status === 'accepted') {
+      rolesGiven.add(key);
+      console.log(`🆕 طلب مقبول: ${app.globalName || app.username}`);
+      await giveRole(app.userId, app.globalName || app.username);
+    }
   }
 }
 
 client.once('ready', () => {
   console.log(`🤖 البوت: ${client.user.tag}`);
   poll();
-  setInterval(poll, 10000);
+  setInterval(poll, 5000);
 });
 
-client.login(BOT_TOKEN).catch(e => console.log('خطأ في تسجيل الدخول:', e.message));
+client.login(BOT_TOKEN).catch(e => console.log('خطأ:', e.message));
