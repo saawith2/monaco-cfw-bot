@@ -55,9 +55,15 @@ async function sendDM(userId, message) {
 
 /* ── Send Embed with Buttons ── */
 async function sendEmbed(key, app) {
+  console.log(`📤 يحاول يرسل إمبد...`);
+  console.log(`   GUILD_ID:   ${GUILD_ID}`);
+  console.log(`   CHANNEL_ID: ${CHANNEL_ID}`);
+  console.log(`   userId:     ${app.userId}`);
   try {
     const guild   = await client.guilds.fetch(GUILD_ID);
+    console.log(`   ✅ السيرفر: ${guild.name}`);
     const channel = await guild.channels.fetch(CHANNEL_ID);
+    console.log(`   ✅ الروم: ${channel.name}`);
     const av      = app.userId && app.avatar
       ? `https://cdn.discordapp.com/avatars/${app.userId}/${app.avatar}.png?size=128`
       : 'https://cdn.discordapp.com/embed/avatars/0.png';
