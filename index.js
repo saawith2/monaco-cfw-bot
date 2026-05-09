@@ -9,7 +9,7 @@ const BOT_TOKEN  = process.env.BOT_TOKEN;
 const GUILD_ID   = process.env.GUILD_ID;
 const ROLE_ID    = process.env.ROLE_ID;
 const CHANNEL_ID = process.env.CHANNEL_ID;
-const FIREBASE   = 'https://monacocfw-default-rtdb.firebaseio.com';
+const FIREBASE   = 'https://monaco1-58d60-default-rtdb.firebaseio.com';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
