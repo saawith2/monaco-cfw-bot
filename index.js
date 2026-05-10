@@ -47,8 +47,17 @@ async function poll() {
     const status = app.status || 'pending';
 
     if (firstRun) {
-      // أول تشغيل: احفظ الحالات الحالية بدون معالجة
+      // أول تشغيل: احفظ الحالة — ولو accepted وما عنده رتبة، أعطه
       lastStatus[key] = status;
+      if (status === 'accepted' && app.userId) {
+        try {
+          const guild  = await client.guilds.fetch(GUILD_ID);
+          const member = await guild.members.fetch(app.userId).catch(() => null);
+          if (member && !member.roles.cache.has(ROLE_ID)) {
+            await giveRole(app.userId, app.globalName || app.username);
+          }
+        } catch(e) {}
+      }
       continue;
     }
 
