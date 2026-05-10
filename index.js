@@ -11,9 +11,10 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
 
-// Keep-alive
+// Keep-alive - يمنع Railway من إيقاف البوت
 http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
 
+/* ─── Firebase ─── */
 function fetchFirebase() {
   return new Promise(resolve => {
     https.get(FIREBASE_URL, res => {
@@ -24,6 +25,7 @@ function fetchFirebase() {
   });
 }
 
+/* ─── Get Member ─── */
 async function getMember(userId) {
   try {
     const guild = await client.guilds.fetch(GUILD_ID);
@@ -31,6 +33,7 @@ async function getMember(userId) {
   } catch { return null; }
 }
 
+/* ─── Give Role ─── */
 async function giveRole(userId, username) {
   const member = await getMember(userId);
   if (!member) { console.log(`⚠️ ${username} مش في السيرفر`); return; }
@@ -39,6 +42,7 @@ async function giveRole(userId, username) {
   console.log(`✅ رتبة أُعطيت لـ ${username}`);
 }
 
+/* ─── Send DM ─── */
 async function sendDM(userId, msg) {
   const member = await getMember(userId);
   if (!member) return;
@@ -48,6 +52,7 @@ async function sendDM(userId, msg) {
   } catch(e) { console.log(`⚠️ ما قدر يرسل DM: ${e.message}`); }
 }
 
+/* ─── Poll ─── */
 const lastStatus = {};
 let firstRun = true;
 
@@ -62,10 +67,9 @@ async function poll() {
     const status = app.status || 'pending';
     const name   = app.globalName || app.username || 'Unknown';
 
-    /* ── أول تشغيل ── */
+    /* أول تشغيل */
     if (firstRun) {
       lastStatus[key] = status;
-      // لو accepted وما عنده رتبة → أعطه
       if (status === 'accepted') await giveRole(app.userId, name);
       continue;
     }
@@ -73,7 +77,7 @@ async function poll() {
     const prev = lastStatus[key];
     lastStatus[key] = status;
 
-    /* ── طلب جديد ── */
+    /* طلب جديد */
     if (prev === undefined) {
       console.log(`🆕 طلب جديد (${status}): ${name}`);
       if (status === 'pending') {
@@ -88,24 +92,23 @@ async function poll() {
         await sendDM(app.userId,
           `🎉 **تم قبول تقديمك الإلكتروني!**\n\n` +
           `مرحباً **${name}** في عائلة **MONACO CFW** 🏆\n\n` +
-          `📅 يرجى الذهاب إلى السيرفر ومعرفة **موعد الاختبار الصوتي** مع الإدارة.\n\n` +
+          `📅 يرجى الذهاب إلى السيرفر ومعرفة **موعد الاختبار الصوتي**.\n\n` +
           `نتمنى لك تجربة رائعة! 🎮`
         );
       }
       continue;
     }
 
-    /* ── تغيّرت الحالة ── */
+    /* تغيّرت الحالة */
     if (prev === status) continue;
-
-    console.log(`🔄 تغيّر: ${name} — ${prev} ← ${status}`);
+    console.log(`🔄 تغيّر: ${name} — ${prev} → ${status}`);
 
     if (status === 'accepted') {
       await giveRole(app.userId, name);
       await sendDM(app.userId,
         `🎉 **تم قبول تقديمك الإلكتروني!**\n\n` +
         `مرحباً **${name}** في عائلة **MONACO CFW** 🏆\n\n` +
-        `📅 يرجى الذهاب إلى السيرفر ومعرفة **موعد الاختبار الصوتي** مع الإدارة.\n\n` +
+        `📅 يرجى الذهاب إلى السيرفر ومعرفة **موعد الاختبار الصوتي**.\n\n` +
         `نتمنى لك تجربة رائعة! 🎮`
       );
     } else if (status === 'rejected') {
@@ -120,103 +123,11 @@ async function poll() {
 
   if (firstRun) {
     firstRun = false;
-    console.log(`✅ جاهز — ${entries.length} طلب موجود، يراقب التغييرات...`);
-  }
-}
-
-client.once('ready', () => {
-  console.log(`🤖 ${client.user.tag} — شغّال`);
-  poll();
-  setInterval(poll, 8000);
-});
-
-client.login(BOT_TOKEN).catch(e => console.log('خطأ:', e.message));
-
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
-});
-
-function fetchFirebase() {
-  return new Promise(resolve => {
-    https.get(FIREBASE_URL, res => {
-      let raw = '';
-      res.on('data', c => raw += c);
-      res.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve(null); } });
-    }).on('error', e => { console.log('Firebase error:', e.message); resolve(null); });
-  });
-}
-
-async function giveRole(userId, username) {
-  try {
-    const guild  = await client.guilds.fetch(GUILD_ID);
-    const member = await guild.members.fetch(userId).catch(() => null);
-    if (!member) { console.log(`⚠️ ${username} مش في السيرفر`); return; }
-    if (member.roles.cache.has(ROLE_ID)) { console.log(`${username} - عنده الرتبة`); return; }
-    await member.roles.add(ROLE_ID);
-    console.log(`✅ رتبة أُعطيت لـ ${username}`);
-  } catch(e) {
-    console.log(`خطأ: ${e.message}`);
-  }
-}
-
-// نخزن آخر حالة لكل طلب
-const lastStatus = {};
-let firstRun = true;
-
-async function poll() {
-  const data = await fetchFirebase();
-  if (!data || typeof data !== 'object') return;
-
-  const entries = Object.entries(data);
-
-  for (const [key, app] of entries) {
-    const status = app.status || 'pending';
-
-    if (firstRun) {
-      // أول تشغيل: احفظ الحالة — ولو accepted وما عنده رتبة، أعطه
-      lastStatus[key] = status;
-      if (status === 'accepted' && app.userId) {
-        try {
-          const guild  = await client.guilds.fetch(GUILD_ID);
-          const member = await guild.members.fetch(app.userId).catch(() => null);
-          if (member && !member.roles.cache.has(ROLE_ID)) {
-            await giveRole(app.userId, app.globalName || app.username);
-          }
-        } catch(e) {}
-      }
-      continue;
-    }
-
-    const prev = lastStatus[key];
-    lastStatus[key] = status;
-
-    // طلب جديد لم يُرَ
-    if (prev === undefined) {
-      console.log(`🆕 طلب جديد (${status}): ${app.globalName || app.username}`);
-      if (status === 'accepted') {
-        await giveRole(app.userId, app.globalName || app.username);
-      }
-      continue;
-    }
-
-    // تغيّرت الحالة إلى accepted
-    if (prev !== 'accepted' && status === 'accepted') {
-      console.log(`🎉 تم قبول: ${app.globalName || app.username}`);
-      await giveRole(app.userId, app.globalName || app.username);
-    }
-  }
-
-  if (firstRun) {
-    firstRun = false;
     console.log(`✅ جاهز — ${entries.length} طلب موجود، يراقب التغييرات كل 8 ثواني`);
   }
 }
 
-const http = require('http');
-
-// سيرفر بسيط يمنع Railway من إيقاف البوت
-http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
-
+/* ─── Start ─── */
 client.once('ready', () => {
   console.log(`🤖 ${client.user.tag} — شغّال`);
   poll();
