@@ -1,146 +1,126 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 const https = require('https');
 
-/* ══════ CONFIG ══════ */
-const BOT_TOKEN    = process.env.BOT_TOKEN;
-const GUILD_ID     = process.env.GUILD_ID;
-const ROLE_ID      = process.env.ROLE_ID;
-const FIREBASE_URL = 'https://monaco1-58d60-default-rtdb.firebaseio.com';
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const GUILD_ID  = process.env.GUILD_ID;
+const ROLE_ID   = process.env.ROLE_ID;
+const FIREBASE  = 'https://monaco1-58d60-default-rtdb.firebaseio.com/cfw_applications.json';
 
-/* ══════ DISCORD CLIENT ══════ */
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
 
-/* ══════ HTTP HELPER ══════ */
-function get(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, res => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch(e) { resolve(null); }
-      });
-    }).on('error', reject);
+/* ─── Firebase GET ─── */
+function fetchData() {
+  return new Promise(resolve => {
+    https.get(FIREBASE, res => {
+      let raw = '';
+      res.on('data', c => raw += c);
+      res.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve(null); } });
+    }).on('error', () => resolve(null));
   });
 }
 
-/* ══════ GIVE ROLE ══════ */
-async function giveRole(userId) {
+/* ─── Send DM ─── */
+async function sendDM(userId, message) {
   try {
     const guild  = await client.guilds.fetch(GUILD_ID);
     const member = await guild.members.fetch(userId).catch(() => null);
-
-    // ← DEBUG: شوف إيه اللي جاي من Firebase وإيه الـ Discord user
-    console.log(`🔎 userId من Firebase: "${userId}" | username: ${member?.user?.username ?? 'مش لاقيه'} | tag: ${member?.user?.tag ?? 'N/A'}`);
-
-    if (!member) {
-      console.log(`⚠️ اللاعب ${userId} مش في السيرفر — تأكد إن الـ userId في Firebase هو Discord ID صح`);
-      return;
-    }
-    if (member.roles.cache.has(ROLE_ID)) {
-      console.log(`ℹ️ ${member.user.username} عنده الرتبة مسبقاً — الـ ROLE_ID: ${ROLE_ID}`);
-      return;
-    }
-    await member.roles.add(ROLE_ID);
-    console.log(`✅ تم إعطاء الرتبة لـ ${member.user.username}`);
-  } catch (err) {
-    console.error('❌ خطأ في إعطاء الرتبة:', err.message);
+    if (!member) return;
+    await member.send(message);
+    console.log(`📩 DM أُرسلت لـ ${member.user.username}`);
+  } catch(e) {
+    console.log(`⚠️ ما قدر يرسل DM: ${e.message}`);
   }
 }
 
-/* ══════ POLLING ══════ */
-let lastKeys = new Set();
+/* ─── Give Role ─── */
+async function giveRole(userId, username) {
+  try {
+    const guild  = await client.guilds.fetch(GUILD_ID);
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) return;
+    if (member.roles.cache.has(ROLE_ID)) return;
+    await member.roles.add(ROLE_ID);
+    console.log(`✅ رتبة: ${username}`);
+  } catch(e) {
+    console.log(`⚠️ خطأ رتبة: ${e.message}`);
+  }
+}
+
+/* ─── Track State ─── */
+// key → last known status
+const knownStatus = {};
 let firstRun = true;
 
-async function checkApplications() {
-  try {
-    console.log('🔍 يفحص Firebase...');
-    const data = await get(`${FIREBASE_URL}/cfw_applications.json`);
+async function poll() {
+  const data = await fetchData();
+  if (!data || typeof data !== 'object') return;
 
-    if (!data) {
-      console.log('⚠️ Firebase رجع null — تأكد من Database Rules');
-      return;
-    }
-
-    const keys = Object.keys(data);
-    console.log(`📊 عدد الطلبات الكلي: ${keys.length}`);
+  for (const [key, app] of Object.entries(data)) {
+    if (!app?.userId) continue;
+    const status = app.status || 'pending';
 
     if (firstRun) {
-      keys.forEach(k => lastKeys.add(k));
-      firstRun = false;
-      console.log(`📋 ${keys.length} طلب موجود مسبقاً — يستمع للجديدة...`);
-      return;
+      // احفظ الحالات الموجودة بدون معالجة
+      knownStatus[key] = status;
+      continue;
     }
 
-    for (const key of keys) {
-      if (lastKeys.has(key)) continue;
-      lastKeys.add(key);
+    const prev = knownStatus[key];
 
-      const app = data[key];
-
-      // ← DEBUG: شوف كل بيانات الطلب الجديد
-      console.log(`🆕 طلب جديد! key: ${key}`);
-      console.log(`📦 بيانات الطلب:`, JSON.stringify(app, null, 2));
-
-      if (!app || !app.userId) {
-        console.log('⚠️ الطلب ما فيه userId — تأكد من اسم الـ field في Firebase');
-        continue;
+    /* ── طلب جديد لم يُرَ من قبل ── */
+    if (prev === undefined) {
+      knownStatus[key] = status;
+      if (status === 'pending') {
+        console.log(`🆕 طلب جديد: ${app.globalName || app.username}`);
+        await sendDM(app.userId,
+          `👋 **أهلاً ${app.globalName || app.username}!**\n\n` +
+          `📋 **طلبك قيد المراجعة**\n` +
+          `تم استلام تقديمك في **MONACO CFW** بنجاح.\n` +
+          `سيتم الرد عليك قريباً — تابع السيرفر! ⏳`
+        );
       }
-
-      await giveRole(app.userId);
+      continue;
     }
 
-  } catch (err) {
-    console.error('❌ خطأ في الفحص:', err.message);
+    /* ── تغيّر الحالة ── */
+    if (prev !== status) {
+      knownStatus[key] = status;
+
+      if (status === 'accepted') {
+        console.log(`✅ مقبول: ${app.globalName || app.username}`);
+        await giveRole(app.userId, app.globalName || app.username);
+        await sendDM(app.userId,
+          `🎉 **تم قبول تقديمك الإلكتروني!**\n\n` +
+          `مرحباً **${app.globalName || app.username}** في عائلة **MONACO CFW** 🏆\n\n` +
+          `📅 يرجى الذهاب إلى السيرفر ومعرفة **موعد الاختبار الصوتي** مع الإدارة.\n\n` +
+          `نتمنى لك تجربة رائعة! 🎮`
+        );
+
+      } else if (status === 'rejected') {
+        console.log(`❌ مرفوض: ${app.globalName || app.username}`);
+        await sendDM(app.userId,
+          `❌ **تم رفض طلبك**\n\n` +
+          `مرحباً **${app.globalName || app.username}**،\n` +
+          `لم يتم قبول تقديمك في **MONACO CFW** هذه المرة.\n\n` +
+          `💪 راجع القوانين جيداً وحاول مرة أخرى!\n`
+        );
+      }
+    }
+  }
+
+  if (firstRun) {
+    firstRun = false;
+    console.log(`✅ جاهز — ${Object.keys(knownStatus).length} طلب موجود، يراقب التغييرات...`);
   }
 }
 
-/* ══════ SLASH COMMANDS ══════ */
-async function registerCommands() {
-  const commands = [
-    new SlashCommandBuilder()
-      .setName('owner')
-      .setDescription('صانع البوت')
-      .toJSON()
-  ];
-
-  const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-  try {
-    await rest.put(
-      Routes.applicationGuildCommands(client.user.id, GUILD_ID),
-      { body: commands }
-    );
-    console.log('✅ تم تسجيل الأوامر بنجاح');
-  } catch (err) {
-    console.error('❌ خطأ في تسجيل الأوامر:', err.message);
-  }
-}
-
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-
-  if (interaction.commandName === 'owner') {
-    await interaction.reply({
-      content: '👑 صانع البوت العم كافح <@1266569651664457738>',
-      allowedMentions: { users: ['1266569651664457738'] }
-    });
-  }
+/* ─── Start ─── */
+client.once('ready', () => {
+  console.log(`🤖 ${client.user.tag} — شغّال`);
+  poll();
+  setInterval(poll, 8000);
 });
 
-/* ══════ START ══════ */
-client.once('ready', async () => {
-  console.log(`✅ البوت شغّال: ${client.user.tag}`);
-  console.log(`🔧 GUILD_ID: ${GUILD_ID}`);
-  console.log(`🔧 ROLE_ID: ${ROLE_ID}`);
-  await registerCommands();
-  // فحص كل 10 ثواني
-  checkApplications();
-  setInterval(checkApplications, 10000);
-});
-
-client.login(BOT_TOKEN);
+client.login(BOT_TOKEN).catch(e => console.error('خطأ:', e.message));
