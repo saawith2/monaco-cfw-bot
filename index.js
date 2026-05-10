@@ -77,6 +77,11 @@ async function poll() {
   }
 }
 
+const http = require('http');
+
+// سيرفر بسيط يمنع Railway من إيقاف البوت
+http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
+
 client.once('ready', () => {
   console.log(`🤖 ${client.user.tag} — شغّال`);
   poll();
