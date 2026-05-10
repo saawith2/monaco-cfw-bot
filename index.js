@@ -4,7 +4,7 @@ const https = require('https');
 const BOT_TOKEN    = process.env.BOT_TOKEN;
 const GUILD_ID     = process.env.GUILD_ID;
 const ROLE_ID      = process.env.ROLE_ID;
-const FIREBASE_URL = 'https://monaco1-58d60-default-rtdb.firebaseio.com/cfw_applications.json';
+const FIREBASE_URL = 'https://monacocfw-default-rtdb.firebaseio.com/cfw_applications.json';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
