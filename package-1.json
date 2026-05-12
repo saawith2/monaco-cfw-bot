@@ -1,0 +1,28 @@
+{
+  "name": "monaco-cfw-bot",
+  "version": "2.0.0",
+  "description": "بوت Discord لنظام التفعيل في MONACO CFW",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "monaco",
+    "cfw",
+    "firebase"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.13.0"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
