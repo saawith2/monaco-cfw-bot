@@ -5,6 +5,9 @@ const {
   ButtonBuilder, 
   ActionRowBuilder, 
   ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   REST,
   Routes
 } = require('discord.js');
@@ -17,30 +20,60 @@ const GUILD_ID     = process.env.GUILD_ID;
 const FIREBASE_URL = 'https://monacocfw-default-rtdb.firebaseio.com/cfw_applications.json';
 
 let ROLE_ID = null;
+let LOG_CHANNEL_ID = null;
+
+// تخزين مؤقت لـ Buttons (messageId -> userId)
+const buttonMap = new Map();
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds, 
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.DirectMessages
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.MessageContent
   ]
 });
 
 // Keep-alive
 http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
 
-/* ─── Firebase ─── */
+/* ─── Firebase Functions ─── */
 function fetchFirebase() {
   return new Promise(resolve => {
     https.get(FIREBASE_URL, res => {
       let raw = '';
       res.on('data', c => raw += c);
       res.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve(null); } });
-    }).on('error', e => { console.log('Firebase error:', e.message); resolve(null); });
+    }).on('error', e => { console.log('🔥 Firebase error:', e.message); resolve(null); });
   });
 }
 
-/* ─── Get Member ─── */
+// تحديث Firebase
+function updateFirebase(path, data) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'monacocfw-default-rtdb.firebaseio.com',
+      port: 443,
+      path: `/cfw_applications${path}.json`,
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }
+    };
+
+    const req = https.request(options, (res) => {
+      res.on('end', () => resolve(true));
+    });
+
+    req.on('error', (e) => {
+      console.log('Firebase update error:', e.message);
+      resolve(false);
+    });
+
+    req.write(JSON.stringify(data));
+    req.end();
+  });
+}
+
+/* ─── Member Functions ─── */
 async function getMember(userId) {
   try {
     const guild = await client.guilds.fetch(GUILD_ID);
@@ -48,37 +81,112 @@ async function getMember(userId) {
   } catch { return null; }
 }
 
+async function getChannel(channelId) {
+  try {
+    return await client.channels.fetch(channelId).catch(() => null);
+  } catch { return null; }
+}
+
 /* ─── Give Role ─── */
 async function giveRole(userId, username) {
-  if (!ROLE_ID) { console.log(`⚠️ لم يتم تعيين الرتبة`); return; }
+  if (!ROLE_ID) { 
+    console.log(`⚠️ لم يتم تعيين الرتبة`); 
+    return false; 
+  }
   const member = await getMember(userId);
-  if (!member) { console.log(`⚠️ ${username} مش في السيرفر`); return; }
-  if (member.roles.cache.has(ROLE_ID)) { console.log(`${username} - عنده الرتبة`); return; }
-  await member.roles.add(ROLE_ID);
-  console.log(`✅ رتبة أُعطيت لـ ${username}`);
+  if (!member) { 
+    console.log(`⚠️ ${username} مش في السيرفر`); 
+    return false; 
+  }
+  if (member.roles.cache.has(ROLE_ID)) { 
+    console.log(`✅ ${username} - عنده الرتبة بالفعل`); 
+    return true; 
+  }
+  
+  try {
+    await member.roles.add(ROLE_ID);
+    console.log(`✅ رتبة أُعطيت لـ ${username}`);
+    return true;
+  } catch(e) {
+    console.log(`⚠️ خطأ في إعطاء الرتبة: ${e.message}`);
+    return false;
+  }
 }
 
-/* ─── Send DM with Buttons ─── */
-async function sendDMWithButtons(userId, embed, buttons) {
-  const member = await getMember(userId);
-  if (!member) return;
+/* ─── Send to Log Channel ─── */
+async function sendEmbedToLogChannel(app, key) {
+  if (!LOG_CHANNEL_ID) { 
+    console.log(`⚠️ لم يتم تعيين روم السجل`); 
+    return null; 
+  }
+  
+  const channel = await getChannel(LOG_CHANNEL_ID);
+  if (!channel) { 
+    console.log(`⚠️ روم السجل غير موجود`); 
+    return null; 
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor('#FFA500')
+    .setTitle('📋 طلب تفعيل جديد')
+    .setDescription(`يوجد طلب تفعيل جديد بانتظار المراجعة`)
+    .addFields(
+      { name: '👤 الاسم', value: app.globalName || app.username || 'Unknown', inline: true },
+      { name: '🎮 المعرف', value: app.userId || 'Unknown', inline: true },
+      { name: '📝 البريد', value: app.email || 'غير متوفر', inline: false },
+      { name: '⏰ الوقت', value: new Date().toLocaleString('ar-SA'), inline: false }
+    )
+    .setFooter({ text: `معرف الطلب: ${key}` })
+    .setTimestamp();
+
+  const acceptButton = new ButtonBuilder()
+    .setCustomId(`accept_${key}_${app.userId}`)
+    .setLabel('✅ قبول')
+    .setStyle(ButtonStyle.Success);
+
+  const rejectButton = new ButtonBuilder()
+    .setCustomId(`reject_${key}_${app.userId}`)
+    .setLabel('❌ رفض')
+    .setStyle(ButtonStyle.Danger);
+
+  const row = new ActionRowBuilder().addComponents(acceptButton, rejectButton);
+
   try {
-    await member.send({ 
+    const message = await channel.send({ 
       embeds: [embed],
-      components: buttons ? [new ActionRowBuilder().addComponents(buttons)] : []
+      components: [row]
     });
-    console.log(`📩 رسالة أُرسلت لـ ${member.user.username}`);
-  } catch(e) { console.log(`⚠️ ما قدر يرسل: ${e.message}`); }
+    
+    // حفظ الربط
+    buttonMap.set(message.id, { 
+      userId: app.userId, 
+      username: app.username,
+      key: key 
+    });
+    
+    console.log(`📤 Embed أُرسل لروم السجل - ${app.username}`);
+    return message.id;
+  } catch(e) { 
+    console.log(`⚠️ خطأ في الإرسال: ${e.message}`); 
+    return null;
+  }
 }
 
-/* ─── Send DM Text ─── */
-async function sendDM(userId, msg) {
+/* ─── Send DM ─── */
+async function sendDM(userId, content) {
   const member = await getMember(userId);
-  if (!member) return;
+  if (!member) return false;
   try {
-    await member.send(msg);
-    console.log(`📩 رسالة نصية أُرسلت لـ ${member.user.username}`);
-  } catch(e) { console.log(`⚠️ ما قدر يرسل: ${e.message}`); }
+    if (typeof content === 'string') {
+      await member.send(content);
+    } else {
+      await member.send({ embeds: [content] });
+    }
+    return true;
+  } catch(e) { 
+    console.log(`⚠️ ما قدر يرسل: ${e.message}`); 
+    return false;
+  }
 }
 
 /* ─── Poll ─── */
@@ -94,12 +202,10 @@ async function poll() {
   for (const [key, app] of entries) {
     if (!app?.userId) continue;
     const status = app.status || 'pending';
-    const name   = app.globalName || app.username || 'Unknown';
+    const name = app.globalName || app.username || 'Unknown';
 
-    /* أول تشغيل */
     if (firstRun) {
       lastStatus[key] = status;
-      if (status === 'accepted') await giveRole(app.userId, name);
       continue;
     }
 
@@ -110,65 +216,8 @@ async function poll() {
     if (prev === undefined) {
       console.log(`🆕 طلب جديد (${status}): ${name}`);
       if (status === 'pending') {
-        const embed = new EmbedBuilder()
-          .setColor('#FFA500')
-          .setTitle('📋 طلبك قيد المراجعة')
-          .setDescription(`تم إرسال طلبك، طلبك قيد المراجعة`)
-          .addFields(
-            { name: 'الحالة', value: '⏳ قيد الانتظار', inline: false }
-          )
-          .setTimestamp();
-        await sendDMWithButtons(app.userId, embed, null);
-      } else if (status === 'accepted') {
-        await giveRole(app.userId, name);
-        const embed = new EmbedBuilder()
-          .setColor('#00FF00')
-          .setTitle('🎉 تم قبول تقديمك!')
-          .setDescription(`تم قبولك توجه السيرفر لمعرفة مواعيد التفعيل`)
-          .addFields(
-            { name: 'الحالة', value: '✅ مقبول', inline: false }
-          )
-          .setTimestamp();
-        await sendDMWithButtons(app.userId, embed, null);
-      } else if (status === 'rejected') {
-        const embed = new EmbedBuilder()
-          .setColor('#FF0000')
-          .setTitle('❌ تم رفض طلبك')
-          .setDescription(`حاول مرة أخرى كمان 12 ساعة`)
-          .addFields(
-            { name: 'الحالة', value: '❌ مرفوض', inline: false }
-          )
-          .setTimestamp();
-        await sendDMWithButtons(app.userId, embed, null);
+        await sendEmbedToLogChannel(app, key);
       }
-      continue;
-    }
-
-    /* تغيّرت الحالة */
-    if (prev === status) continue;
-    console.log(`🔄 تغيّر: ${name} — ${prev} → ${status}`);
-
-    if (status === 'accepted') {
-      await giveRole(app.userId, name);
-      const embed = new EmbedBuilder()
-        .setColor('#00FF00')
-        .setTitle('🎉 تم قبول تقديمك!')
-        .setDescription(`${name}, تم قبولك توجه السيرفر لمعرفة مواعيد التفعيل`)
-        .addFields(
-          { name: 'الحالة', value: '✅ مقبول', inline: false }
-        )
-        .setTimestamp();
-      await sendDMWithButtons(app.userId, embed, null);
-    } else if (status === 'rejected') {
-      const embed = new EmbedBuilder()
-        .setColor('#FF0000')
-        .setTitle('❌ تم رفض طلبك')
-        .setDescription(`حاول مرة أخرى كمان 12 ساعة`)
-        .addFields(
-          { name: 'الحالة', value: '❌ مرفوض', inline: false }
-        )
-        .setTimestamp();
-      await sendDMWithButtons(app.userId, embed, null);
     }
   }
 
@@ -203,6 +252,22 @@ const commands = [
         required: true
       }
     ]
+  },
+  {
+    name: 'set-log-channel',
+    description: 'تعيين روم السجل (حيث يتم إرسال الطلبات)',
+    options: [
+      {
+        name: 'channel',
+        description: 'الروم المراد تعيينها',
+        type: 7,
+        required: true
+      }
+    ]
+  },
+  {
+    name: 'stats',
+    description: 'عرض إحصائيات الطلبات'
   }
 ];
 
@@ -222,30 +287,195 @@ async function registerCommands() {
 
 /* ─── Interaction Handler ─── */
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isCommand()) return;
+  try {
+    /* Slash Commands */
+    if (interaction.isCommand()) {
+      const { commandName, options } = interaction;
 
-  const { commandName, options } = interaction;
+      if (commandName === 'set-role') {
+        const roleId = options.getRole('role').id;
+        ROLE_ID = roleId;
+        
+        await interaction.reply({
+          content: `✅ تم تعيين الرتبة: <@&${roleId}>`,
+          ephemeral: true
+        });
+        console.log(`✅ رتبة: ${roleId}`);
+      }
 
-  if (commandName === 'set-role') {
-    const roleId = options.getRole('role').id;
-    ROLE_ID = roleId;
-    
-    await interaction.reply({
-      content: `✅ تم تعيين الرتبة: <@&${roleId}>`,
-      ephemeral: true
-    });
-    console.log(`✅ رتبة تم تعيينها: ${roleId}`);
-  }
+      if (commandName === 'set-guild') {
+        const guildId = options.getString('guild_id');
+        process.env.GUILD_ID = guildId;
+        
+        await interaction.reply({
+          content: `✅ تم تعيين السيرفر: ${guildId}`,
+          ephemeral: true
+        });
+      }
 
-  if (commandName === 'set-guild') {
-    const guildId = options.getString('guild_id');
-    process.env.GUILD_ID = guildId;
-    
-    await interaction.reply({
-      content: `✅ تم تعيين السيرفر: ${guildId}`,
-      ephemeral: true
-    });
-    console.log(`✅ سيرفر تم تعيينه: ${guildId}`);
+      if (commandName === 'set-log-channel') {
+        const channelId = options.getChannel('channel').id;
+        LOG_CHANNEL_ID = channelId;
+        
+        await interaction.reply({
+          content: `✅ تم تعيين روم السجل: <#${channelId}>`,
+          ephemeral: true
+        });
+        console.log(`✅ روم السجل: ${channelId}`);
+      }
+
+      if (commandName === 'stats') {
+        const data = await fetchFirebase();
+        if (!data) {
+          await interaction.reply({
+            content: '❌ خطأ في الاتصال بـ Firebase',
+            ephemeral: true
+          });
+          return;
+        }
+
+        const entries = Object.values(data);
+        const pending = entries.filter(e => e.status === 'pending').length;
+        const accepted = entries.filter(e => e.status === 'accepted').length;
+        const rejected = entries.filter(e => e.status === 'rejected').length;
+
+        const statsEmbed = new EmbedBuilder()
+          .setColor('#5865F2')
+          .setTitle('📊 إحصائيات الطلبات')
+          .addFields(
+            { name: '⏳ قيد الانتظار', value: `${pending}`, inline: true },
+            { name: '✅ مقبول', value: `${accepted}`, inline: true },
+            { name: '❌ مرفوض', value: `${rejected}`, inline: true },
+            { name: '📈 الإجمالي', value: `${entries.length}`, inline: false }
+          )
+          .setTimestamp();
+
+        await interaction.reply({
+          embeds: [statsEmbed],
+          ephemeral: true
+        });
+      }
+    }
+
+    /* Button Interactions */
+    if (interaction.isButton()) {
+      const customId = interaction.customId;
+      const [action, key, userId] = customId.split('_');
+
+      if (action === 'accept') {
+        console.log(`✅ قبول من ${interaction.user.username} للمستخدم ${userId}`);
+        
+        // إعطاء الرتبة
+        const member = await getMember(userId);
+        if (ROLE_ID && member) {
+          const roleGiven = await giveRole(userId, member.user.username);
+          
+          if (roleGiven) {
+            // تحديث Firebase
+            await updateFirebase(`/${key}`, { 
+              status: 'accepted',
+              acceptedBy: interaction.user.id,
+              acceptedAt: new Date().toISOString()
+            });
+
+            // رسالة التأكيد للموظف
+            await interaction.reply({
+              content: `✅ تم قبول الطلب للمستخدم <@${userId}> وإعطاؤه الرتبة`,
+              ephemeral: true
+            });
+
+            // رسالة للعضو
+            const acceptEmbed = new EmbedBuilder()
+              .setColor('#00FF00')
+              .setTitle('🎉 تم قبول تقديمك!')
+              .setDescription(`تم قبولك من قبل ${interaction.user.username}\nتوجه السيرفر لمعرفة مواعيد التفعيل`)
+              .setTimestamp();
+            
+            await sendDM(userId, acceptEmbed);
+
+            // تحديث الـ Embed الأصلي
+            const newEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+              .setColor('#00FF00')
+              .setTitle('✅ تم القبول')
+              .addFields({ name: 'قبلها', value: `<@${interaction.user.id}>`, inline: false });
+            
+            await interaction.message.edit({ embeds: [newEmbed], components: [] });
+          } else {
+            await interaction.reply({
+              content: `⚠️ خطأ في إعطاء الرتبة. تأكد من أن رتبة البوت أعلى`,
+              ephemeral: true
+            });
+          }
+        }
+      }
+
+      if (action === 'reject') {
+        const modal = new ModalBuilder()
+          .setCustomId(`reject_modal_${key}_${userId}`)
+          .setTitle('سبب الرفض');
+
+        const reasonInput = new TextInputBuilder()
+          .setCustomId('reject_reason')
+          .setLabel('اكتب سبب الرفض')
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder('مثال: البيانات غير مكتملة')
+          .setRequired(true)
+          .setMaxLength(500);
+
+        const actionRow = new ActionRowBuilder().addComponents(reasonInput);
+        modal.addComponents(actionRow);
+
+        await interaction.showModal(modal);
+      }
+    }
+
+    /* Modal Submit */
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId.startsWith('reject_modal_')) {
+        const [_, key, userId] = interaction.customId.split('_');
+        const reason = interaction.fields.getTextInputValue('reject_reason');
+
+        console.log(`❌ رفض من ${interaction.user.username} - السبب: ${reason}`);
+
+        // تحديث Firebase
+        await updateFirebase(`/${key}`, { 
+          status: 'rejected',
+          rejectedBy: interaction.user.id,
+          rejectReason: reason,
+          rejectedAt: new Date().toISOString()
+        });
+
+        await interaction.reply({
+          content: `❌ تم رفض الطلب للمستخدم <@${userId}>\n**السبب:** ${reason}`,
+          ephemeral: true
+        });
+
+        // رسالة للعضو
+        const rejectEmbed = new EmbedBuilder()
+          .setColor('#FF0000')
+          .setTitle('❌ تم رفض طلبك')
+          .setDescription(`حاول مرة أخرى كمان 12 ساعة`)
+          .addFields(
+            { name: 'السبب', value: reason, inline: false }
+          )
+          .setTimestamp();
+        
+        await sendDM(userId, rejectEmbed);
+
+        // تحديث الـ Embed الأصلي
+        const newEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+          .setColor('#FF0000')
+          .setTitle('❌ تم الرفض')
+          .addFields(
+            { name: 'رفضها', value: `<@${interaction.user.id}>`, inline: true },
+            { name: 'السبب', value: reason, inline: false }
+          );
+        
+        await interaction.message.edit({ embeds: [newEmbed], components: [] });
+      }
+    }
+  } catch(e) {
+    console.log(`❌ خطأ في معالجة interaction: ${e.message}`);
   }
 });
 
