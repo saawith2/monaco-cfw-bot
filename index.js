@@ -21,7 +21,7 @@ const FIREBASE_URL = 'https://monacocfw-default-rtdb.firebaseio.com/cfw_applicat
 
 let ROLE_ID = null;
 let LOG_CHANNEL_ID = null;
-let ADMIN_USERS = []; // قائمة المسؤولين
+let ADMIN_USERS = [];
 
 const client = new Client({
   intents: [
@@ -33,12 +33,10 @@ const client = new Client({
 
 http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
 
-/* ─── Check Admin ─── */
 function isAdmin(userId) {
   return ADMIN_USERS.includes(userId);
 }
 
-/* ─── Firebase ─── */
 function fetchFirebase() {
   return new Promise(resolve => {
     https.get(FIREBASE_URL, res => {
@@ -49,7 +47,6 @@ function fetchFirebase() {
   });
 }
 
-/* ─── Get Member ─── */
 async function getMember(userId) {
   try {
     const guild = await client.guilds.fetch(GUILD_ID);
@@ -57,14 +54,12 @@ async function getMember(userId) {
   } catch { return null; }
 }
 
-/* ─── Get Channel ─── */
 async function getChannel(channelId) {
   try {
     return await client.channels.fetch(channelId).catch(() => null);
   } catch { return null; }
 }
 
-/* ─── Give Role ─── */
 async function giveRole(userId, username) {
   if (!ROLE_ID) { console.log(`⚠️ لم يتم تعيين الرتبة`); return; }
   const member = await getMember(userId);
@@ -74,7 +69,6 @@ async function giveRole(userId, username) {
   console.log(`✅ رتبة أُعطيت لـ ${username}`);
 }
 
-/* ─── Build Questions Embed ─── */
 function buildQuestionsEmbed(questions) {
   if (!questions || Object.keys(questions).length === 0) {
     return null;
@@ -103,7 +97,6 @@ function buildQuestionsEmbed(questions) {
   return embed;
 }
 
-/* ─── Send Embed to Log Channel ─── */
 async function sendEmbedToLogChannel(app) {
   if (!LOG_CHANNEL_ID) { 
     console.log(`⚠️ لم يتم تعيين روم السجل`); 
@@ -161,7 +154,19 @@ async function sendEmbedToLogChannel(app) {
   }
 }
 
-/* ─── Poll ─── */
+/* ─── Get User Application Status ─── */
+async function getUserApplicationStatus(userId) {
+  const data = await fetchFirebase();
+  if (!data || typeof data !== 'object') return null;
+
+  for (const [key, app] of Object.entries(data)) {
+    if (app?.userId === userId) {
+      return app;
+    }
+  }
+  return null;
+}
+
 const lastStatus = {};
 let firstRun = true;
 
@@ -202,7 +207,7 @@ async function poll() {
       const embed = new EmbedBuilder()
         .setColor('#00FF00')
         .setTitle('🎉 تم قبول تقديمك!')
-        .setDescription(`تم قبولك توجه السيرفر لمعرفة مواعيد التفعيل`)
+        .setDescription(`تم قبولك توجه إلي معرفة مواعيد التفعيل الصوتي`)
         .addFields(
           { name: 'الحالة', value: '✅ مقبول', inline: false }
         )
@@ -218,8 +223,8 @@ async function poll() {
       const reason = app.rejectReason || 'لم يتم تحديد سبب';
       const embed = new EmbedBuilder()
         .setColor('#FF0000')
-        .setTitle('❌ تم رفض طلبك')
-        .setDescription(`حاول مرة أخرى كمان 12 ساعة`)
+        .setTitle('❌ تم رفضك')
+        .setDescription(`حاول بعد 12 ساعة`)
         .addFields(
           { name: 'السبب', value: reason, inline: false },
           { name: 'الحالة', value: '❌ مرفوض', inline: false }
@@ -241,33 +246,6 @@ async function poll() {
   }
 }
 
-/* ─── Get Statistics ─── */
-async function getStatistics() {
-  const data = await fetchFirebase();
-  if (!data || typeof data !== 'object') {
-    return { pending: 0, accepted: 0, rejected: 0, total: 0 };
-  }
-
-  let pending = 0, accepted = 0, rejected = 0;
-
-  for (const app of Object.values(data)) {
-    if (!app?.userId) continue;
-    const status = app.status || 'pending';
-    
-    if (status === 'pending') pending++;
-    else if (status === 'accepted') accepted++;
-    else if (status === 'rejected') rejected++;
-  }
-
-  return {
-    pending,
-    accepted,
-    rejected,
-    total: pending + accepted + rejected
-  };
-}
-
-/* ─── Slash Commands ─── */
 const commands = [
   {
     name: 'admin',
@@ -293,7 +271,7 @@ const commands = [
   },
   {
     name: 'نتائج',
-    description: 'عرض إحصائيات الطلبات'
+    description: 'معرفة حالة طلبك'
   },
   {
     name: 'set-role',
@@ -347,14 +325,12 @@ async function registerCommands() {
   }
 }
 
-/* ─── Interaction Handler ─── */
 client.on('interactionCreate', async interaction => {
   if (interaction.isCommand()) {
     const { commandName, options, user } = interaction;
 
     /* ─── Admin Command ─── */
     if (commandName === 'admin') {
-      // فقط مالك السيرفر يقدر يضيف admins
       if (interaction.guild.ownerId !== user.id) {
         return await interaction.reply({
           content: '❌ فقط مالك السيرفر يقدر يستخدم هذا الأمر',
@@ -396,33 +372,56 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    /* ─── Results Command ─── */
+    /* ─── Results Command - User Personal Status ─── */
     if (commandName === 'نتائج') {
-      if (!isAdmin(user.id)) {
+      const userApp = await getUserApplicationStatus(user.id);
+
+      if (!userApp) {
         return await interaction.reply({
-          content: '❌ أنت لا تملك صلاحية استخدام هذا الأمر',
+          content: '❌ لم يتم العثور على طلب لك',
           ephemeral: true
         });
       }
 
-      const stats = await getStatistics();
-      
-      const embed = new EmbedBuilder()
-        .setColor('#5865f2')
-        .setTitle('📊 إحصائيات الطلبات')
-        .addFields(
-          { name: '⏳ قيد الانتظار', value: `${stats.pending}`, inline: true },
-          { name: '✅ مقبول', value: `${stats.accepted}`, inline: true },
-          { name: '❌ مرفوض', value: `${stats.rejected}`, inline: true },
-          { name: '📈 الإجمالي', value: `${stats.total}`, inline: false }
-        )
-        .setTimestamp();
+      const status = userApp.status || 'pending';
+      let embed;
+
+      if (status === 'pending') {
+        embed = new EmbedBuilder()
+          .setColor('#FFA500')
+          .setTitle('⏳ طلبك قيد التنفيذ')
+          .setDescription('طلبك قيد التنفيذ، يرجى الانتظار')
+          .addFields(
+            { name: 'الحالة', value: '⏳ قيد الانتظار', inline: false }
+          )
+          .setTimestamp();
+      } else if (status === 'accepted') {
+        embed = new EmbedBuilder()
+          .setColor('#00FF00')
+          .setTitle('🎉 تم قبولك!')
+          .setDescription('تم قبولك توجه إلي معرفة مواعيد التفعيل الصوتي')
+          .addFields(
+            { name: 'الحالة', value: '✅ مقبول', inline: false }
+          )
+          .setTimestamp();
+      } else if (status === 'rejected') {
+        const reason = userApp.rejectReason || 'لم يتم تحديد سبب';
+        embed = new EmbedBuilder()
+          .setColor('#FF0000')
+          .setTitle('❌ تم رفضك')
+          .setDescription('حاول بعد 12 ساعة')
+          .addFields(
+            { name: 'السبب', value: reason, inline: false },
+            { name: 'الحالة', value: '❌ مرفوض', inline: false }
+          )
+          .setTimestamp();
+      }
 
       await interaction.reply({
         embeds: [embed],
-        ephemeral: true
+        ephemeral: true // خاص - لا يشوفها أحد غير الشخص
       });
-      console.log(`📊 عرض الإحصائيات من ${user.username}`);
+      console.log(`📊 ${user.username} شاف حالة طلبه: ${status}`);
     }
 
     /* ─── Set Role ─── */
@@ -483,7 +482,6 @@ client.on('interactionCreate', async interaction => {
     }
   }
 
-  /* ─── Button Interactions ─── */
   if (interaction.isButton()) {
     const customId = interaction.customId;
     const userId = customId.split('_')[1];
@@ -505,7 +503,7 @@ client.on('interactionCreate', async interaction => {
       const embed = new EmbedBuilder()
         .setColor('#00FF00')
         .setTitle('🎉 تم قبول تقديمك!')
-        .setDescription(`تم قبولك من قبل ${interaction.user.username}\nتوجه السيرفر لمعرفة مواعيد التفعيل`)
+        .setDescription(`تم قبولك توجه إلي معرفة مواعيد التفعيل الصوتي`)
         .setTimestamp();
       
       if (member) {
@@ -541,7 +539,6 @@ client.on('interactionCreate', async interaction => {
     }
   }
 
-  /* ─── Modal Submit ─── */
   if (interaction.isModalSubmit()) {
     if (interaction.customId.startsWith('reject_modal_')) {
       const userId = interaction.customId.split('_')[2];
@@ -556,8 +553,8 @@ client.on('interactionCreate', async interaction => {
 
       const embed = new EmbedBuilder()
         .setColor('#FF0000')
-        .setTitle('❌ تم رفض طلبك')
-        .setDescription(`حاول مرة أخرى كمان 12 ساعة`)
+        .setTitle('❌ تم رفضك')
+        .setDescription(`حاول بعد 12 ساعة`)
         .addFields(
           { name: 'السبب', value: reason, inline: false }
         )
